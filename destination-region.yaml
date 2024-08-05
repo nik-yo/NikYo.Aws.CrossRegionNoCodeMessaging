@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: 2010-09-09  
+Parameters:
+  SnsTopicArn:
+    Type: String
+
+  SourceRegion:
+    Type: String
+
+Resources:
+  DestinationSqsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: destination-queue
+      SqsManagedSseEnabled: true
+
+  DestinationSqsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Id: DestQueueSubscriptionPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: SendMessage
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt DestinationSqsQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn:
+                  - !Ref SnsTopicArn
+      Queues: 
+        - !Ref DestinationSqsQueue
+
+  DestinationSnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !GetAtt DestinationSqsQueue.Arn
+      Protocol: sqs
+      Region: !Ref SourceRegion
+      TopicArn: !Ref SnsTopicArn

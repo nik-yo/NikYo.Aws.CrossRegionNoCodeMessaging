@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: 2010-09-09  
+Resources:
+  SourceSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: source-sns
+
+  SourceTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument: !Sub 
+      - |
+        {
+          "Statement": [{
+            "Sid": "Subscription",
+            "Effect": "Allow",
+            "Principal": {
+              "AWS": "${AWS::AccountId}"
+            },
+            "Action": ["sns:Subscribe"],
+            "Resource": "${SnsTopicArn}"
+          }]
+        }
+      - SnsTopicArn: !Ref SourceSnsTopic
+      Topics: 
+        - !Ref SourceSnsTopic
+
+  # SQS
+  SourceSqsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: source-queue
+      SqsManagedSseEnabled: true
+
+  SourceSqsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Id: SourceQueueSubscriptionPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: SendMessage
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt SourceSqsQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn:
+                  - !Ref SourceSnsTopic
+      Queues: 
+        - !Ref SourceSqsQueue
+
+  SourceSnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !GetAtt SourceSqsQueue.Arn
+      Protocol: sqs
+      TopicArn: !Ref SourceSnsTopic
+
+  # ToDestination SNS
+  ToDestinationSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: to-destination-sns
+
+  ToDestinationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Id: SubscriptionPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: Subscription
+            Effect: Allow
+            Principal:
+              AWS: !Ref AWS::AccountId
+            Action: sns:Subscribe
+            Resource: !Ref ToDestinationSnsTopic
+      Topics: 
+        - !Ref ToDestinationSnsTopic
+
+  # Event Bridge pipe
+  SourcePipePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: 'For Source EventBridge Pipe'
+      ManagedPolicyName: source-pipe-policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sns:Publish
+            Resource: !Ref ToDestinationSnsTopic
+          - Effect: Allow
+            Action:
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes
+            Resource: !GetAtt SourceSqsQueue.Arn
+
+  SourcePipeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - pipes.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Description: 'For Source EventBridge Pipe'
+      ManagedPolicyArns: 
+        - !Ref SourcePipePolicy
+      RoleName: source-pipe-role
+
+  SourcePipe:
+    Type: AWS::Pipes::Pipe
+    Properties:
+      Name: source-pipe
+      RoleArn: !GetAtt SourcePipeRole.Arn
+      Source: !GetAtt SourceSqsQueue.Arn
+      Target: !Ref ToDestinationSnsTopic
+
+Outputs:
+  ToDestinationSnsTopicArnOutput:
+    Value: !Ref ToDestinationSnsTopic
+    Export:
+      Name: ToDestinationSnsTopicArn
